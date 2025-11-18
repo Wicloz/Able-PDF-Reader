@@ -394,7 +394,7 @@ class SessionManager:
 
         text = self.llm_pipeline(
             messages,
-            max_new_tokens=len(text),
+            max_new_tokens=int(round(len(self.llm_pipeline.tokenizer(text)['input_ids']) * 1.2)),
             do_sample=False,
         )[0]['generated_text'][2]['content']
 
