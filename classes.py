@@ -145,6 +145,17 @@ class WidgetTopbar:
 
         occupied += 100
 
+        pr.draw_text_ex(
+            pr.get_font_default(),
+            f'/ {self.manager.page_count}',
+            pr.Vector2(occupied, self.top + self.height / 4),
+            int(round(self.height / 2)),
+            1,
+            pr.WHITE,
+        )
+
+        occupied += pr.measure_text(f'/ {self.manager.page_count}', int(round(self.height / 2)))
+
         if pr.gui_button(pr.Rectangle(occupied, self.top, self.height, self.height), '>'):
             self.manager.go_to_page = self.manager.current_page + 1
 
