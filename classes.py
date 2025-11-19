@@ -371,6 +371,22 @@ class SessionManager:
         self.tts_next_paragraph = 0
         self.llm_pipeline = None
 
+        prompt = (
+            "Your job is to normalize text extracted from a PDF to be suitable for processing by text-to-speech software. "
+            "This includes correcting any OCR errors, removing line breaks and word breaks, expanding abbreviations, converting LaTeX math into spoken form, and cleaning up citations and footnotes. "
+            "Consider everything in the context of 'this will be read aloud'. "
+            "This text could be a paragraph, (section) title, author list, table fragment, figure caption, footnote, or some meta content. "
+            "The text is extracted from the PDF as is. It might be short or truncated. Do not correct for this, some other piece of text will have the rest. "
+            "Consider your role as an automated tool and never try to talk to the user. Your output will be used without any further review. "
+            "Don't change the meaning of the text or add any explanations. "
+            "Output only the fully normalized text. "
+            "If no normalization is needed, return the text as is. "
+        )
+
+        self.tts_context = [
+            {'role': 'system', 'content': prompt},
+        ]
+
     def _cache_tts_paragraph(self, pnum):
         text = self.paragraphs[pnum]
 
@@ -378,26 +394,15 @@ class SessionManager:
         print(f'Caching TTS for paragraph {pnum}:')
         print(text)
 
-        prompt = (
-            "You will be provided a paragraph of text extracted from a PDF document."
-            "Your job is to normalize this text to be suitable for processing by text-to-speech software."
-            "This includes correcting any OCR errors, removing line breaks and hyphenations, expanding abbreviations, converting LaTeX math into spoken form, and cleaning up citations and footnotes."
-            "Consider that some paragraphs are actually a (section) title, author list, table fragment, figure caption, or other meta content."
-            "The first and last sentences might be truncated, ignore this."
-            "Don't change the meaning of the text or add any explanations."
-            "Output only the fully normalized paragraph."
-        )
-        messages = [
-            {'role': 'system', 'content': prompt},
-            {'role': 'user', 'content': text},
-        ]
+        self.tts_context.append({'role': 'user', 'content': text})
 
-        text = self.llm_pipeline(
-            messages,
+        self.tts_context = self.llm_pipeline(
+            self.tts_context,
             max_new_tokens=int(round(len(self.llm_pipeline.tokenizer(text)['input_ids']) * 1.2)),
             do_sample=False,
-        )[0]['generated_text'][2]['content']
+        )[0]['generated_text']
 
+        text = self.tts_context[-1]['content']
         print(text)
         print()
 
