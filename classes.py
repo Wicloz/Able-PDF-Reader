@@ -4,6 +4,7 @@ import numpy as np
 from kokoro import KPipeline as KokoroPipeline
 import threading
 from transformers import pipeline
+from enum import Enum, auto
 
 
 # magic numbers
@@ -15,6 +16,13 @@ AUDIOBAR_HEIGHT = 50
 # models and their properties
 TTS_SAMPLE_RATE = 24000
 LL_MODEL_ID = 'meta-llama/Llama-3.2-3B-Instruct'
+
+
+class FitMode(Enum):
+    WIDTH = auto()
+    HEIGHT = auto()
+    NONE = auto()
+    BOTH = auto()
 
 
 class WidgetTTS:
@@ -159,6 +167,26 @@ class WidgetTopbar:
         if pr.gui_button(pr.Rectangle(occupied, self.top, self.height, self.height), '>'):
             self.manager.go_to_page = self.manager.current_page + 1
 
+        occupied += self.height + 100
+
+        if pr.gui_button(pr.Rectangle(occupied, self.top, 150, self.height), 'Fit Width'):
+            self.manager.fit_mode = FitMode.WIDTH
+
+        occupied += 150
+
+        if pr.gui_button(pr.Rectangle(occupied, self.top, 150, self.height), 'Fit Height'):
+            self.manager.fit_mode = FitMode.HEIGHT
+
+        occupied += 150
+
+        if pr.gui_button(pr.Rectangle(occupied, self.top, 150, self.height), 'Fit Page'):
+            self.manager.fit_mode = FitMode.BOTH
+
+        occupied += 150
+
+        if pr.gui_button(pr.Rectangle(occupied, self.top, 150, self.height), 'Original Size'):
+            self.manager.fit_mode = FitMode.NONE
+
 
 class WidgetPDF:
     def __init__(self):
@@ -169,6 +197,7 @@ class WidgetPDF:
         # keep relevant previous state
         self.prev_width = None
         self.prev_zoom = None
+        self.prev_fit_mode = None
 
         # track references to page textures
         self.texture_cache = {}
@@ -178,14 +207,30 @@ class WidgetPDF:
 
     def _rebuild_page_cache(self):
         content_width = self.width * self.manager.zoom
-        self.pdf_page_scales = content_width / self.manager.page_widths
+        content_height = self.height * self.manager.zoom
+
+        match self.manager.fit_mode:
+            case FitMode.BOTH:
+                self.pdf_page_scales = np.minimum(
+                    content_width / self.manager.page_widths,
+                    content_height / self.manager.page_heights,
+                )
+
+            case FitMode.WIDTH:
+                self.pdf_page_scales = content_width / self.manager.page_widths
+
+            case FitMode.HEIGHT:
+                self.pdf_page_scales = content_height / self.manager.page_heights
+
+            case _:
+                self.pdf_page_scales = np.ones(self.manager.page_count, dtype=float)
 
         self.pdf_page_scaled_y = self.manager.page_heights * self.pdf_page_scales
         self.pdf_page_scaled_x = self.manager.page_widths * self.pdf_page_scales
 
         self.pdf_page_y_offsets = np.cumsum(self.pdf_page_scaled_y) - self.pdf_page_scaled_y + PAGE_GAP * np.arange(self.manager.page_count)
         self.content_y_offset = self.top
-        self.pdf_page_x_offsets = np.zeros(self.manager.page_count)
+        self.pdf_page_x_offsets = (content_width - self.pdf_page_scaled_x) / 2
         self.content_x_offset = (self.width - content_width) / 2 + self.left
 
         self.paragraph_offsets = self.pdf_page_scales[self.manager.para_pages][:, np.newaxis] * self.manager.para_rects
@@ -236,14 +281,14 @@ class WidgetPDF:
             if pr.is_key_down(pr.KEY_RIGHT):
                 self.manager.scroll_offset_x += SCROLL_SPEED / self.manager.zoom
 
-        if self.width != self.prev_width or self.manager.zoom != self.prev_zoom:
+        if self.width != self.prev_width or self.manager.zoom != self.prev_zoom or self.manager.fit_mode != self.prev_fit_mode:
             self.prev_width = self.width
             self.prev_zoom = self.manager.zoom
+            self.prev_fit_mode = self.manager.fit_mode
             self._rebuild_page_cache()
 
         if self.manager.go_to_page is not None:
             self.manager.scroll_offset_y = self.pdf_page_y_offsets[self.manager.go_to_page] / self.manager.zoom
-            self.manager.scroll_offset_x = self.pdf_page_x_offsets[self.manager.go_to_page] / self.manager.zoom
             self.manager.go_to_page = None
 
     def render(self):
@@ -365,6 +410,7 @@ class SessionManager:
         self.scroll_offset_y = 0
         self.scroll_offset_x = 0
         self.zoom = 1
+        self.fit_mode = FitMode.BOTH
 
         # keep track of the current page
         self.current_page = 0
