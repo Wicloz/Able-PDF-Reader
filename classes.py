@@ -253,9 +253,6 @@ class WidgetPDF:
             self.mouse_position = pr.Vector2(mouse_position.x - self.left, mouse_position.y - self.top)
 
     def update(self):
-        if len(self.texture_cache) > 0:
-            self.manager.current_page = list(self.texture_cache.keys())[-1]
-
         if self.mouse_position:
             # handle mouse scrolling
             if pr.is_key_down(pr.KEY_LEFT_CONTROL) or pr.is_key_down(pr.KEY_RIGHT_CONTROL):
@@ -290,6 +287,26 @@ class WidgetPDF:
         if self.manager.go_to_page is not None:
             self.manager.scroll_offset_y = self.pdf_page_y_offsets[self.manager.go_to_page] / self.manager.zoom
             self.manager.go_to_page = None
+
+        page_top_relative_to_window = self.pdf_page_y_offsets + self.content_y_offset - self.manager.scroll_offset_y * self.manager.zoom
+        page_left_relative_to_window = self.pdf_page_x_offsets + self.content_x_offset - self.manager.scroll_offset_x * self.manager.zoom
+        self.manager.current_page = np.argmax((np.maximum(
+            0, np.minimum(
+                page_top_relative_to_window + self.pdf_page_scaled_y,
+                self.top + self.height,
+            ) - np.maximum(
+                page_top_relative_to_window,
+                self.top,
+            )
+        ) * np.maximum(
+            0, np.minimum(
+                page_left_relative_to_window + self.pdf_page_scaled_x,
+                self.left + self.width,
+            ) - np.maximum(
+                page_left_relative_to_window,
+                self.left,
+            )
+        )) / (self.pdf_page_scaled_y * self.pdf_page_scaled_x))
 
     def render(self):
         for page_num in range(self.manager.page_count):
