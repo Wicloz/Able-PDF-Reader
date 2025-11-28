@@ -9,6 +9,7 @@ if __name__ == '__main__':
     pr.set_config_flags(pr.FLAG_WINDOW_RESIZABLE | pr.FLAG_VSYNC_HINT)
     pr.set_target_fps(0)
     pr.init_window(1280, 1280, 'PDF Reader')
+    pr.set_exit_key(pr.KEY_NULL)
 
     # check and show capabilities
     print('CUDA:', torch.cuda.is_available())
