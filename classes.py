@@ -196,6 +196,7 @@ class WidgetPDF:
 
         # keep relevant previous state
         self.prev_width = None
+        self.prev_height = None
         self.prev_zoom = None
         self.prev_fit_mode = None
 
@@ -292,8 +293,9 @@ class WidgetPDF:
                 if pr.is_key_down(pr.KEY_MINUS) or pr.is_key_down(pr.KEY_KP_SUBTRACT):
                     self.manager.zoom /= 1.1
 
-        if self.width != self.prev_width or self.manager.zoom != self.prev_zoom or self.manager.fit_mode != self.prev_fit_mode:
+        if self.width != self.prev_width or self.height != self.prev_height or self.manager.zoom != self.prev_zoom or self.manager.fit_mode != self.prev_fit_mode:
             self.prev_width = self.width
+            self.prev_height = self.height
             self.prev_zoom = self.manager.zoom
             self.prev_fit_mode = self.manager.fit_mode
             self._rebuild_page_cache()
