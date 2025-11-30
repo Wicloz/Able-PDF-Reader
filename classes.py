@@ -269,14 +269,28 @@ class WidgetPDF:
                 self.manager.scroll_offset_y -= pr.get_mouse_delta().y / self.manager.zoom
 
             # handle arrow keys
-            if pr.is_key_down(pr.KEY_UP):
-                self.manager.scroll_offset_y -= SCROLL_SPEED / self.manager.zoom
-            if pr.is_key_down(pr.KEY_DOWN):
-                self.manager.scroll_offset_y += SCROLL_SPEED / self.manager.zoom
-            if pr.is_key_down(pr.KEY_LEFT):
-                self.manager.scroll_offset_x -= SCROLL_SPEED / self.manager.zoom
-            if pr.is_key_down(pr.KEY_RIGHT):
-                self.manager.scroll_offset_x += SCROLL_SPEED / self.manager.zoom
+            if pr.is_key_down(pr.KEY_LEFT_CONTROL) or pr.is_key_down(pr.KEY_RIGHT_CONTROL):
+                if pr.is_key_down(pr.KEY_UP) or pr.is_key_down(pr.KEY_LEFT):
+                    self.manager.go_to_page = self.manager.current_page - 1
+                if pr.is_key_down(pr.KEY_DOWN) or pr.is_key_down(pr.KEY_RIGHT):
+                    self.manager.go_to_page = self.manager.current_page + 1
+
+            else:
+                if pr.is_key_down(pr.KEY_UP):
+                    self.manager.scroll_offset_y -= SCROLL_SPEED / self.manager.zoom
+                if pr.is_key_down(pr.KEY_DOWN):
+                    self.manager.scroll_offset_y += SCROLL_SPEED / self.manager.zoom
+                if pr.is_key_down(pr.KEY_LEFT):
+                    self.manager.scroll_offset_x -= SCROLL_SPEED / self.manager.zoom
+                if pr.is_key_down(pr.KEY_RIGHT):
+                    self.manager.scroll_offset_x += SCROLL_SPEED / self.manager.zoom
+
+            # handle more control shortcuts
+            if pr.is_key_down(pr.KEY_LEFT_CONTROL) or pr.is_key_down(pr.KEY_RIGHT_CONTROL):
+                if pr.is_key_down(pr.KEY_EQUAL) or pr.is_key_down(pr.KEY_KP_ADD):
+                    self.manager.zoom *= 1.1
+                if pr.is_key_down(pr.KEY_MINUS) or pr.is_key_down(pr.KEY_KP_SUBTRACT):
+                    self.manager.zoom /= 1.1
 
         if self.width != self.prev_width or self.manager.zoom != self.prev_zoom or self.manager.fit_mode != self.prev_fit_mode:
             self.prev_width = self.width
