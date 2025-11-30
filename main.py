@@ -2,9 +2,22 @@ import pyray as pr
 from sys import argv
 from classes import SessionManager, WidgetPDF, WidgetTopbar, WidgetTTS
 import torch
+from os import environ
+
+
+def load_dotenv():
+    with open('.env', 'r') as fp:
+        for line in fp:
+            line = line.split('#', 1)[0]
+            if '=' in line:
+                key, value = line.split('=', 1)
+                environ[key.strip()] = value.strip()
 
 
 if __name__ == '__main__':
+    # load environment variables
+    load_dotenv()
+
     # initialize PR window
     pr.set_config_flags(pr.FLAG_WINDOW_RESIZABLE | pr.FLAG_VSYNC_HINT)
     pr.set_target_fps(0)
