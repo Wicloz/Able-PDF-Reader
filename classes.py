@@ -7,6 +7,15 @@ from transformers import pipeline
 from enum import Enum, auto
 from rayui import Button, TextField, Padding, Label
 from functools import partial
+from openai import OpenAI
+from markdown_it import MarkdownIt
+import imgkit
+from tempfile import TemporaryDirectory
+import json
+import tiktoken
+import webbrowser
+import requests
+from base64 import b64encode
 
 
 # magic numbers
@@ -15,10 +24,16 @@ PAGE_GAP = 10
 TOPBAR_HEIGHT = 50
 AUDIOBAR_HEIGHT = 50
 UI_BAR_BG_COLOR = pr.Color(41, 44, 48, 255)
+CHATGPT_CHAT_HEIGHT = 600
+CHATGPT_BAR_HEIGHT = 50
 
 # models and their properties
 TTS_SAMPLE_RATE = 24000
 LL_MODEL_ID = 'meta-llama/Llama-3.2-3B-Instruct'
+OPENAI_PREFERRED_MODELS = [
+    ('gpt-5-nano', 400000),
+    ('gpt-4.1-nano', 1047576),
+]
 
 
 class FitMode(Enum):
@@ -26,6 +41,95 @@ class FitMode(Enum):
     HEIGHT = auto()
     NONE = auto()
     BOTH = auto()
+
+
+class WidgetChatHistory:
+    def __init__(self):
+        # fixed widget bounds
+        self.height = CHATGPT_CHAT_HEIGHT
+        self.left = 0
+
+        # remember last rendered texture state
+        self.last_render_width = None
+        self.last_render_messages = 0
+        self.chat_texture = None
+
+        # vertical scroll
+        self.scroll = 0
+
+    def set_manager(self, manager):
+        self.manager = manager
+
+    def start(self, screen_width, screen_height):
+        # variable widget bounds
+        self.top = screen_height - CHATGPT_CHAT_HEIGHT - CHATGPT_BAR_HEIGHT
+        self.width = screen_width
+
+    def update(self):
+        if self.width != self.last_render_width or len(self.manager.chatgpt_history) != self.last_render_messages:
+            self.last_render_width = self.width
+            self.last_render_messages = len(self.manager.chatgpt_history)
+
+            if self.chat_texture is not None:
+                pr.unload_texture(self.chat_texture)
+            self.chat_texture = self.manager._render_chatgpt_history(self.width)
+
+        if self.top <= pr.get_mouse_y() <= self.top + self.height and self.left <= pr.get_mouse_x() <= self.left + self.width:
+            self.scroll += pr.get_mouse_wheel_move() * SCROLL_SPEED
+            self.scroll = max(0, self.scroll)
+            self.scroll = min(self.chat_texture.height - self.height, self.scroll)
+
+    def render(self):
+        if self.chat_texture is not None:
+            pr.draw_texture_rec(
+                self.chat_texture,
+                pr.Rectangle(0, self.chat_texture.height - self.height - self.scroll, self.width, self.height),
+                pr.Vector2(self.left, self.top),
+                pr.WHITE,
+            )
+
+
+class WidgetChatInput:
+    def __init__(self):
+        # fixed widget bounds
+        self.height = CHATGPT_BAR_HEIGHT
+        self.left = 0
+
+        # widget sub elements
+        self.prompt_field = TextField(str, '', 50, self._prompt_callback)
+        self.send_button = Button('Send', self._send_callback)
+
+    def set_manager(self, manager):
+        self.manager = manager
+
+    def start(self, screen_width, screen_height):
+        # variable widget bounds
+        self.top = screen_height - CHATGPT_BAR_HEIGHT
+        self.width = screen_width
+
+    def _prompt_callback(self, value):
+        self.manager.chatgpt_current_prompt = value
+
+    def _send_callback(self):
+        self.prompt_field.set_value('')
+        self.manager.chatgpt_send_prompt()
+        self.manager.chatgpt_current_prompt = ''
+
+    def update(self):
+        send_button_width = self.send_button.get_desired_width(self.height)
+        prompt_field_width = self.width - send_button_width
+
+        self.prompt_field.update(self.top, self.top + self.height, self.left, self.left + prompt_field_width)
+        self.send_button.update(self.top, self.top + self.height, self.left + prompt_field_width, self.left + prompt_field_width + send_button_width)
+
+    def render(self):
+        pr.draw_rectangle(self.left, self.top, self.width, self.height, UI_BAR_BG_COLOR)
+
+        send_button_width = self.send_button.get_desired_width(self.height)
+        prompt_field_width = self.width - send_button_width
+
+        self.prompt_field.render(self.top, self.top + self.height, self.left, self.left + prompt_field_width)
+        self.send_button.render(self.top, self.top + self.height, self.left + prompt_field_width, self.left + prompt_field_width + send_button_width)
 
 
 class WidgetTTS:
@@ -66,7 +170,7 @@ class WidgetTTS:
 
     def start(self, screen_width, screen_height):
         # variable widget bounds
-        self.top = screen_height - AUDIOBAR_HEIGHT
+        self.top = screen_height - CHATGPT_BAR_HEIGHT - CHATGPT_CHAT_HEIGHT - AUDIOBAR_HEIGHT
         self.width = screen_width
 
     def update(self):
@@ -218,7 +322,7 @@ class WidgetPDF:
     def start(self, screen_width, screen_height):
         # variable widget bounds
         self.width = screen_width
-        self.height = screen_height - TOPBAR_HEIGHT - AUDIOBAR_HEIGHT
+        self.height = screen_height - TOPBAR_HEIGHT - AUDIOBAR_HEIGHT - CHATGPT_BAR_HEIGHT - CHATGPT_CHAT_HEIGHT
 
     def update(self):
         if self.top <= pr.get_mouse_y() <= self.top + self.height and self.left <= pr.get_mouse_x() <= self.left + self.width:
@@ -432,7 +536,7 @@ class SessionManager:
         self.tts_next_paragraph = 0
         self.llm_pipeline = None
 
-        prompt = (
+        self.tts_context = [{'role': 'system', 'content': (
             "Your job is to normalize text extracted from a PDF to be suitable for processing by text-to-speech software. "
             "This includes correcting any OCR errors, removing line breaks and word breaks, expanding abbreviations, converting LaTeX math into spoken form, and cleaning up citations and footnotes. "
             "Consider everything in the context of 'this will be read aloud'. "
@@ -442,10 +546,27 @@ class SessionManager:
             "Don't change the meaning of the text or add any explanations. "
             "Output only the fully normalized text. "
             "If no normalization is needed, return the text as is. "
-        )
+        )}]
 
-        self.tts_context = [
-            {'role': 'system', 'content': prompt},
+        # ChatGPT stuff
+        self.chatgpt_current_prompt = ''
+        self.chatgpt_client = OpenAI()
+        self.chatgpt_thread = None
+        self.chatgpt_last_paragraph_mentioned = None
+
+        self.chatgpt_history = [
+            {'role': 'developer', 'content': (
+                "The user is currently reading a PDF document. "
+                "Provide helpful and concise answers based on the content of the document. "
+                "Look up any citations or references in the document when necessary. "
+                "If the user asks a question that is unrelated to the document you should point this out but help them regardless. "
+            )},
+            {'role': 'developer', 'content': 'The following is the content of the PDF document the user is reading:'},
+            {'role': 'developer', 'content': json.dumps([{
+                'page_number': int(self.para_pages[idx]),
+                'paragraph_number': idx,
+                'text': self.paragraphs[idx],
+            } for idx in range(len(self.paragraphs))])},
         ]
 
     def _cache_tts_paragraph(self, pnum):
@@ -597,3 +718,159 @@ class SessionManager:
         if self.tts_sound is not None:
             pr.stop_sound(self.tts_sound)
         self.tts_next_paragraph = pnum
+
+    def _render_chatgpt_history(self, width):
+        md = MarkdownIt('gfm-like')
+        html = ''
+
+        for message in self.chatgpt_history:
+            if message['role'] == 'user' or message['role'] == 'assistant':
+                html += md.render(message['content'])
+
+        with open('assets/chatTemplate.html', mode='r', encoding='UTF8') as fp:
+            template = fp.read()
+
+        with open('assets/Lexend-VariableFont_wght.ttf', 'rb') as fp:
+            font_base_64 = b64encode(fp.read()).decode('ascii')
+
+        template = template.replace('{{MARKDOWN_HTML}}', html)
+        template = template.replace('{{LEXEND_PATH}}', f'data:font/ttf;base64,{font_base_64}')
+
+        with TemporaryDirectory() as tempdir:
+            imgkit.from_string(template, f'{tempdir}/output.png', options={
+                'width': width,
+                'encoding': 'UTF8',
+            })
+            texture = pr.load_texture(f'{tempdir}/output.png')
+
+        return texture
+
+    def chatgpt_send_prompt(self):
+        if self.chatgpt_last_paragraph_mentioned != self.tts_current_paragraph:
+            self.chatgpt_history.append({'role': 'developer', 'content': 'The user is currently reading the following paragraph:'})
+            self.chatgpt_history.append({'role': 'developer', 'content': self.paragraphs[self.tts_current_paragraph]})
+            self.chatgpt_last_paragraph_mentioned = self.tts_current_paragraph
+
+        self.chatgpt_history.append({'role': 'user', 'content': self.chatgpt_current_prompt})
+        self._chatgpt_send_context()
+
+    def _chatgpt_send_context(self):
+        # determine the best model we can use
+        for model, context_size in OPENAI_PREFERRED_MODELS:
+            tokenizer = tiktoken.encoding_for_model(model)
+            token_count = sum(len(tokenizer.encode(json.dumps(message))) for message in self.chatgpt_history)
+            if token_count < context_size * 0.9:
+                break
+
+        print(f'Sending prompt to "{model}" with ~{token_count} tokens in context')
+
+        response = self.chatgpt_client.responses.create(
+            model=model, input=self.chatgpt_history,
+            tools=[{
+                "type": "function",
+                "name": "go_to_page",
+                "description": "Make the PDF reader go to a specific page.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "page": {
+                            "type": "integer",
+                            "description": "The page number to go to, 0 indexed.",
+                        },
+                    },
+                    "required": ["page"],
+                },
+            }, {
+                "type": "function",
+                "name": "narrate_paragraph",
+                "description": "Start TTS narration at the specified paragraph.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "paragraph": {
+                            "type": "integer",
+                            "description": "The paragraph number to start narrating, 0 indexed.",
+                        },
+                    },
+                    "required": ["paragraph"],
+                },
+            }, {
+                "type": "function",
+                "name": "open_in_browser",
+                "description": "Open a specific website in the user's browser.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "website": {
+                            "type": "string",
+                            "description": "The website to show in the user's browser.",
+                        },
+                    },
+                    "required": ["website"],
+                },
+            }, {
+                "type": "function",
+                "name": "make_get_request",
+                "description": "Downloads the content of a specific website and returns it to you. Use this to look up information from web pages. Use with a properly constructed URL to do web searches.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "website": {
+                            "type": "string",
+                            "description": "The website to download.",
+                        },
+                    },
+                    "required": ["website"],
+                },
+            }],
+        )
+
+        self.chatgpt_history.append({'role': 'assistant', 'content': response.output_text})
+
+        for item in response.output:
+            if item.type == 'function_call':
+                arguments = json.loads(item.arguments)
+
+                if item.name == 'go_to_page':
+                    self.go_to_page = arguments['page']
+                    self.chatgpt_history.append({
+                        'role': 'developer',
+                        'content': 'Successfully navigated to page ' + str(arguments['page']) + '.',
+                    })
+
+                if item.name == 'narrate_paragraph':
+                    self.narration_jump_to_paragraph(arguments['paragraph'])
+                    self.narration_play()
+                    self.chatgpt_history.append({
+                        'role': 'developer',
+                        'content': 'Successfully started narration at paragraph ' + str(arguments['paragraph']) + '.',
+                    })
+
+                if item.name == 'open_in_browser':
+                    webbrowser.open(arguments['website'])
+                    self.chatgpt_history.append({
+                        'role': 'developer',
+                        'content': 'Successfully opened "' + arguments['website'] + '" in the user\'s browser.',
+                    })
+
+                if item.name == 'make_get_request':
+                    response = requests.get(arguments['website'])
+
+                    if not response.ok:
+                        self.chatgpt_history.append({
+                            'role': 'developer',
+                            'content': 'Failed to download the content of "' + arguments['website'] + '" with status code ' + str(response.status_code) + ':',
+                        })
+
+                    else:
+                        self.chatgpt_history.append({
+                            'role': 'developer',
+                            'content': 'Successfully downloaded the content of "' + arguments['website'] + '":',
+                        })
+
+                    self.chatgpt_history.append({
+                        'role': 'developer',
+                        'content': response.text,
+                    })
+
+                    self._chatgpt_send_context()
