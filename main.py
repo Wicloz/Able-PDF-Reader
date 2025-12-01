@@ -1,6 +1,7 @@
 import pyray as pr
 from sys import argv
 from classes import SessionManager, WidgetPDF, WidgetTopbar, WidgetTTS
+from rayui import set_ui_font
 import torch
 from os import environ
 
@@ -27,6 +28,9 @@ if __name__ == '__main__':
     # check and show capabilities
     print('CUDA:', torch.cuda.is_available())
 
+    # load custom font
+    set_ui_font('assets/Inter-VariableFont_opsz,wght.ttf', 2)
+
     # open PDF and keep it open
     pdf_manager = SessionManager(argv[1])
 
@@ -39,14 +43,13 @@ if __name__ == '__main__':
     tts_widget.set_manager(pdf_manager)
 
     while not pr.window_should_close():
-        mouse_position = pr.get_mouse_position()
         screen_width = pr.get_screen_width()
         screen_height = pr.get_screen_height()
 
         # widget starts
-        pdf_widget.start(mouse_position, screen_width, screen_height)
-        topbar_widget.start(mouse_position, screen_width, screen_height)
-        tts_widget.start(mouse_position, screen_width, screen_height)
+        pdf_widget.start(screen_width, screen_height)
+        topbar_widget.start(screen_width, screen_height)
+        tts_widget.start(screen_width, screen_height)
 
         # widget updates
         pdf_widget.update()
@@ -65,4 +68,5 @@ if __name__ == '__main__':
         # end drawing
         pr.end_drawing()
 
+    # cleanup after close is requested
     pr.close_window()

@@ -5,6 +5,8 @@ from kokoro import KPipeline as KokoroPipeline
 import threading
 from transformers import pipeline
 from enum import Enum, auto
+from rayui import Button, TextField, Padding, Label
+from functools import partial
 
 
 # magic numbers
@@ -12,6 +14,7 @@ SCROLL_SPEED = 20
 PAGE_GAP = 10
 TOPBAR_HEIGHT = 50
 AUDIOBAR_HEIGHT = 50
+UI_BAR_BG_COLOR = pr.Color(41, 44, 48, 255)
 
 # models and their properties
 TTS_SAMPLE_RATE = 24000
@@ -31,55 +34,58 @@ class WidgetTTS:
         self.height = AUDIOBAR_HEIGHT
         self.left = 0
 
-        self.editing_speed = False
-        self.speed_ptr = pr.ffi.new('int *')
+        # widget sub elements
+        self.elements = [
+            Button('Play', self._play_callback),
+            Button('Pause', self._pause_callback),
+            Padding(100),
+            Label('Speed:'),
+            TextField(float, 1, 3, self._speed_callback),
+            Padding(100),
+            Button('Replay', self._replay_callback),
+            Button('Next', self._next_callback),
+        ]
+
+    def _play_callback(self):
+        self.manager.narration_play()
+
+    def _pause_callback(self):
+        self.manager.narration_pause()
+
+    def _replay_callback(self):
+        self.manager.narration_rewind()
+
+    def _next_callback(self):
+        self.manager.narration_jump_to_paragraph(self.manager.tts_next_paragraph)
+
+    def _speed_callback(self, value):
+        self.manager.change_tts_speed(value)
 
     def set_manager(self, manager):
         self.manager = manager
 
-    def start(self, mouse_position, screen_width, screen_height):
+    def start(self, screen_width, screen_height):
         # variable widget bounds
         self.top = screen_height - AUDIOBAR_HEIGHT
         self.width = screen_width
 
-        # determine mouse position in widget
-        self.mouse_position = None
-        if mouse_position.y > self.top:
-            self.mouse_position = mouse_position
-
     def update(self):
         self.manager.narration_continue()
 
-        if not self.editing_speed:
-            self.speed_ptr[0] = int(round(self.manager.tts_speed * 100))
+        occupied = self.left
+        for element in self.elements:
+            desired_width = element.get_desired_width(self.height)
+            element.update(self.top, self.top + self.height, occupied, occupied + desired_width)
+            occupied += desired_width
 
     def render(self):
-        pr.draw_rectangle(self.left, self.top, self.width, self.height, pr.BLACK)
-        pr.gui_set_style(pr.DEFAULT, pr.TEXT_SIZE, int(round(self.height / 2)))
+        pr.draw_rectangle(self.left, self.top, self.width, self.height, UI_BAR_BG_COLOR)
 
-        if pr.gui_button(pr.Rectangle(0, self.top, 100, self.height), 'PLAY'):
-            self.manager.narration_play()
-
-        if pr.gui_button(pr.Rectangle(100, self.top, 100, self.height), 'PAUSE'):
-            self.manager.narration_pause()
-
-        if pr.gui_value_box(
-            pr.Rectangle(400, self.top, 100, self.height),
-            'Speed % ',
-            self.speed_ptr,
-            50,
-            200,
-            self.editing_speed,
-        ):
-            if self.editing_speed:
-                self.manager.change_tts_speed(self.speed_ptr[0] / 100)
-            self.editing_speed = not self.editing_speed
-
-        if pr.gui_button(pr.Rectangle(600, self.top, 100, self.height), 'REPLAY'):
-            self.manager.narration_rewind()
-
-        if pr.gui_button(pr.Rectangle(700, self.top, 100, self.height), 'NEXT'):
-            self.manager.narration_jump_to_paragraph(self.manager.tts_next_paragraph)
+        occupied = self.left
+        for element in self.elements:
+            desired_width = element.get_desired_width(self.height)
+            element.render(self.top, self.top + self.height, occupied, occupied + desired_width)
+            occupied += desired_width
 
 
 class WidgetTopbar:
@@ -89,103 +95,69 @@ class WidgetTopbar:
         self.height = TOPBAR_HEIGHT
         self.left = 0
 
-        self.editing_zoom = False
-        self.zoom_ptr = pr.ffi.new('int *')
+        # widget sub elements
+        self.zoom_field = TextField(int, 100, 3, self._zoom_callback)
+        self.page_field = TextField(int, 0, 3, self._set_page_callback)
+        self.page_label = Label('/ 0')
 
-        self.editing_page = False
-        self.page_ptr = pr.ffi.new('int *')
+        self.elements = [
+            Label('Zoom %:'),
+            self.zoom_field,
+            Padding(100),
+            Button('<', self._prev_page_callback),
+            self.page_field,
+            self.page_label,
+            Button('>', self._next_page_callback),
+            Padding(100),
+            Label('Fit:'),
+            Button('Width', partial(self._set_fit_mode, FitMode.WIDTH)),
+            Button('Height', partial(self._set_fit_mode, FitMode.HEIGHT)),
+            Button('Page', partial(self._set_fit_mode, FitMode.BOTH)),
+            Padding(10),
+            Button('Original Size', partial(self._set_fit_mode, FitMode.NONE)),
+        ]
 
     def set_manager(self, manager):
         self.manager = manager
 
-    def start(self, mouse_position, screen_width, screen_height):
+    def _zoom_callback(self, value):
+        self.manager.zoom = value / 100
+
+    def _prev_page_callback(self):
+        self.manager.go_to_page = self.manager.current_page - 1
+
+    def _next_page_callback(self):
+        self.manager.go_to_page = self.manager.current_page + 1
+
+    def _set_page_callback(self, value):
+        self.manager.go_to_page = value - 1
+
+    def _set_fit_mode(self, fit_mode):
+        self.manager.fit_mode = fit_mode
+
+    def start(self, screen_width, screen_height):
         # variable widget bounds
         self.width = screen_width
 
-        # determine mouse position in widget
-        self.mouse_position = None
-        if mouse_position.y < self.height:
-            self.mouse_position = mouse_position
-
     def update(self):
-        if not self.editing_zoom:
-            self.zoom_ptr[0] = int(round(self.manager.zoom * 100))
+        self.zoom_field.set_value(int(round(self.manager.zoom * 100)))
+        self.page_field.set_value(self.manager.current_page + 1)
+        self.page_label.text = f'/ {self.manager.page_count}'
 
-        if not self.editing_page:
-            self.page_ptr[0] = self.manager.current_page + 1
+        occupied = self.left
+        for element in self.elements:
+            desired_width = element.get_desired_width(self.height)
+            element.update(self.top, self.top + self.height, occupied, occupied + desired_width)
+            occupied += desired_width
 
     def render(self):
-        pr.draw_rectangle(self.left, self.top, self.width, self.height, pr.BLACK)
+        pr.draw_rectangle(self.left, self.top, self.width, self.height, UI_BAR_BG_COLOR)
 
-        pr.gui_set_style(pr.DEFAULT, pr.TEXT_SIZE, int(round(self.height / 2)))
-        occupied = self.left + 100
-
-        if pr.gui_value_box(
-            pr.Rectangle(occupied, self.top, 100, self.height),
-            'Zoom % ',
-            self.zoom_ptr,
-            10,
-            800,
-            self.editing_zoom,
-        ):
-            if self.editing_zoom:
-                self.manager.zoom = self.zoom_ptr[0] / 100
-            self.editing_zoom = not self.editing_zoom
-
-        occupied += 200
-
-        if pr.gui_button(pr.Rectangle(occupied, self.top, self.height, self.height), '<'):
-            self.manager.go_to_page = self.manager.current_page - 1
-
-        occupied += self.height
-
-        if pr.gui_value_box(
-            pr.Rectangle(occupied, self.top, 100, self.height),
-            '',
-            self.page_ptr,
-            1,
-            self.manager.page_count,
-            self.editing_page,
-        ):
-            if self.editing_page:
-                self.manager.go_to_page = self.page_ptr[0] - 1
-            self.editing_page = not self.editing_page
-
-        occupied += 100
-
-        pr.draw_text_ex(
-            pr.get_font_default(),
-            f'/ {self.manager.page_count}',
-            pr.Vector2(occupied, self.top + self.height / 4),
-            int(round(self.height / 2)),
-            1,
-            pr.WHITE,
-        )
-
-        occupied += pr.measure_text(f'/ {self.manager.page_count}', int(round(self.height / 2)))
-
-        if pr.gui_button(pr.Rectangle(occupied, self.top, self.height, self.height), '>'):
-            self.manager.go_to_page = self.manager.current_page + 1
-
-        occupied += self.height + 100
-
-        if pr.gui_button(pr.Rectangle(occupied, self.top, 150, self.height), 'Fit Width'):
-            self.manager.fit_mode = FitMode.WIDTH
-
-        occupied += 150
-
-        if pr.gui_button(pr.Rectangle(occupied, self.top, 150, self.height), 'Fit Height'):
-            self.manager.fit_mode = FitMode.HEIGHT
-
-        occupied += 150
-
-        if pr.gui_button(pr.Rectangle(occupied, self.top, 150, self.height), 'Fit Page'):
-            self.manager.fit_mode = FitMode.BOTH
-
-        occupied += 150
-
-        if pr.gui_button(pr.Rectangle(occupied, self.top, 150, self.height), 'Original Size'):
-            self.manager.fit_mode = FitMode.NONE
+        occupied = self.left
+        for element in self.elements:
+            desired_width = element.get_desired_width(self.height)
+            element.render(self.top, self.top + self.height, occupied, occupied + desired_width)
+            occupied += desired_width
 
 
 class WidgetPDF:
@@ -243,18 +215,13 @@ class WidgetPDF:
             pr.unload_texture(texture)
         self.texture_cache = {}
 
-    def start(self, mouse_position, screen_width, screen_height):
+    def start(self, screen_width, screen_height):
         # variable widget bounds
         self.width = screen_width
         self.height = screen_height - TOPBAR_HEIGHT - AUDIOBAR_HEIGHT
 
-        # determine mouse position in widget
-        self.mouse_position = None
-        if mouse_position.y > self.top and mouse_position.y < self.top + self.height:
-            self.mouse_position = pr.Vector2(mouse_position.x - self.left, mouse_position.y - self.top)
-
     def update(self):
-        if self.mouse_position:
+        if self.top <= pr.get_mouse_y() <= self.top + self.height and self.left <= pr.get_mouse_x() <= self.left + self.width:
             # handle mouse scrolling
             if pr.is_key_down(pr.KEY_LEFT_CONTROL) or pr.is_key_down(pr.KEY_RIGHT_CONTROL):
                 self.manager.zoom *= np.exp(pr.get_mouse_wheel_move() * 0.1)
@@ -359,6 +326,10 @@ class WidgetPDF:
             texture = self.texture_cache[page_num]
             pr.draw_texture(texture, int(page_left_relative_to_window), int(page_top_relative_to_window), pr.WHITE)
 
+        mouse_pos_x = pr.get_mouse_x()
+        mouse_pos_y = pr.get_mouse_y()
+        mouse_in_viewport = self.left <= mouse_pos_x <= self.left + self.width and self.top <= mouse_pos_y <= self.top + self.height
+
         for para_num in range(len(self.manager.paragraphs)):
             highlight_left = self.paragraph_offsets[para_num][0] + self.content_x_offset - self.manager.scroll_offset_x * self.manager.zoom
             highlight_top = self.paragraph_offsets[para_num][1] + self.content_y_offset - self.manager.scroll_offset_y * self.manager.zoom
@@ -385,14 +356,14 @@ class WidgetPDF:
                     pr.Color(255, 0, 0, 50),
                 )
 
-            elif self.mouse_position and (
-                self.mouse_position.x >= highlight_left
+            elif mouse_in_viewport and (
+                mouse_pos_x >= highlight_left
                 and
-                self.mouse_position.x <= highlight_left + highlight_width
+                mouse_pos_x <= highlight_left + highlight_width
                 and
-                self.mouse_position.y + self.top >= highlight_top
+                mouse_pos_y >= highlight_top
                 and
-                self.mouse_position.y + self.top <= highlight_top + highlight_height
+                mouse_pos_y <= highlight_top + highlight_height
             ):
                 pr.draw_rectangle(
                     int(highlight_left),
