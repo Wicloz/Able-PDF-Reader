@@ -562,11 +562,10 @@ class SessionManager:
                 "If the user asks a question that is unrelated to the document you should point this out but help them regardless. "
             )},
             {'role': 'developer', 'content': 'The following is the content of the PDF document the user is reading:'},
-            {'role': 'developer', 'content': json.dumps([{
-                'page_number': int(self.para_pages[idx]),
-                'paragraph_number': idx,
-                'text': self.paragraphs[idx],
-            } for idx in range(len(self.paragraphs))])},
+            {'role': 'developer', 'content': ''.join(
+                f'Page Index {self.para_pages[idx]}, Paragraph Index {idx}:\n{self.paragraphs[idx]}\n\n'
+                for idx in range(len(self.paragraphs))
+            )},
         ]
 
     def _cache_tts_paragraph(self, pnum):
